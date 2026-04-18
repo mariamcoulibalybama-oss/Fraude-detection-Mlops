@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Prometheus lui-même
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Application (à activer quand le consumer expose des métriques)
+  # - job_name: 'fraude-consumer'
+  #   static_configs:
+  #     - targets: ['consumer:8000']
+
+  # Kafka (nécessite JMX exporter - à ajouter si besoin)
+  # - job_name: 'kafka'
+  #   static_configs:
+  #     - targets: ['kafka-exporter:9308']

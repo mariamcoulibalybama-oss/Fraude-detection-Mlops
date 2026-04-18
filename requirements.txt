@@ -1,0 +1,50 @@
+# ============================================================
+# Dépendances Python du projet
+# Installer avec : pip install -r requirements.txt
+# ============================================================
+
+# Data science core
+pandas>=2.2.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
+xgboost>=2.0.0
+imbalanced-learn>=0.12.0
+shap>=0.44.0
+
+# Visualisation
+matplotlib>=3.8.0
+seaborn>=0.13.0
+plotly>=5.18.0
+
+# Kafka / Streaming
+kafka-python>=2.0.2
+faust-streaming>=0.11.0
+
+# Bases de données
+redis>=5.0.0
+pymongo>=4.6.0
+
+# MLOps
+mlflow>=2.10.0
+evidently>=0.4.0
+prometheus-client>=0.20.0
+
+# UI
+streamlit>=1.30.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
+
+# Utilitaires
+pydantic>=2.6.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
+click>=8.1.0
+loguru>=0.7.0
+
+# Développement
+pytest>=8.0.0
+pytest-cov>=4.1.0
+black>=24.0.0
+flake8>=7.0.0
+jupyter>=1.0.0
+ipykernel>=6.29.0
