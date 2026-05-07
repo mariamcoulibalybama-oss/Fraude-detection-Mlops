@@ -95,24 +95,36 @@ def test_mongodb(
         from pymongo import MongoClient
         from pymongo.errors import ServerSelectionTimeoutError
 
-        uri = f"mongodb://{user}:{password}@{host}:{port}/"
-        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        db = client["test_db"]
-        collection = db["test_collection"]
+        # Correctif Windows : force l'IPv4 si localhost est utilisé
+        target_host = "127.0.0.1" if host == "localhost" else host
+
+        # Construction de l'URI avec authSource
+        uri = f"mongodb://{user}:{password}@127.0.0.1:{port}/?authSource=admin"
+        
+        # Initialisation du client
+        client = MongoClient(uri, serverSelectionTimeoutMS=5000, connect=True)
+        
+        # Etape 1: Tester l'authentification pure (Ping)
+        client.admin.command('ping')
+        
+        # Etape 2: Tester les droits d'écriture/lecture
+        db = client["admin"]
+        collection = db["test_connectivity_check"]
         result = collection.insert_one({"test": "hello-mongo"})
         found = collection.find_one({"_id": result.inserted_id})
         collection.delete_one({"_id": result.inserted_id})
+        
         client.close()
+        
         if found and found["test"] == "hello-mongo":
-            return True, "Insert/find OK"
+            return True, "Authentification et CRUD OK"
         return False, "Lecture ne correspond pas à l'insertion"
-    except ImportError:
-        return False, "Librairie pymongo non installée (pip install pymongo)"
-    except ServerSelectionTimeoutError as e:
-        return False, f"Timeout de connexion : {e}"
-    except Exception as e:
-        return False, str(e)
 
+    except ServerSelectionTimeoutError:
+        return False, f"Impossible de joindre MongoDB sur {target_host}:{port} (Timeout)"
+    except Exception as e:
+        # Renvoie l'erreur précise (ex: Authentication Failed)
+        return False, str(e)
 
 def test_mlflow(host: str = "localhost", port: int = 5000) -> Tuple[bool, str]:
     """Test MLflow : vérifier que le serveur répond."""
@@ -169,16 +181,19 @@ def main() -> int:
     # Charger les variables d'environnement si .env existe
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+
+        load_dotenv(dotenv_path=".env")
         print_info("Variables d'environnement chargées depuis .env")
     except ImportError:
         print_info("python-dotenv non installé, utilisation des valeurs par défaut")
 
     # Lire les hosts depuis les env vars ou utiliser localhost
-    host = os.getenv("DOCKER_HOST", "localhost")
-    mongo_user = os.getenv("MONGO_USER", "admin")
-    mongo_password = os.getenv("MONGO_PASSWORD", "changeme")
+    host = os.getenv("DOCKER_HOST", "localhost").strip()
+    mongo_user = os.getenv("MONGO_USER", "admin").strip()
+    mongo_password = os.getenv("MONGO_PASSWORD", "changeme").strip()
 
+    print("DEBUG MONGO_USER =", mongo_user)
+    print("DEBUG MONGO_PASSWORD =", mongo_password)
     print_info(f"Hôte testé : {host}")
     print()
 

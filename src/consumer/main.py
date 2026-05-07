@@ -1,90 +1,63 @@
-"""
-Consumer Kafka - template de démarrage.
-
-Ce script est un squelette. À développer dans la semaine 5 du planning.
-
-Objectif final :
-- Consommer les transactions depuis Kafka
-- Enrichir avec des features en temps réel (via Redis)
-- Appeler le modèle XGBoost pour scorer
-- Générer l'explication SHAP
-- Stocker le résultat dans MongoDB
-- Publier les alertes sur le topic 'alerts'
-
-Usage:
-    python -m src.consumer.main
-"""
-
 import json
-from typing import Dict, Any
-
+import joblib
+import pandas as pd
 from kafka import KafkaConsumer
+from loguru import logger
+from pymongo import MongoClient
+from datetime import datetime
 
-from src.utils.config import config
-from src.utils.logger import get_logger
+# ── Modèle ─────────────────────────────────────────────────
+pipeline = joblib.load("models/pipeline_v1.pkl")
+model = pipeline["model"]
+feature_names = pipeline["feature_names"]
 
-logger = get_logger(__name__)
+# ── MongoDB ────────────────────────────────────────────────
+mongo = MongoClient("mongodb://admin:changeme@localhost:27017/")
+db = mongo["fraude_db"]
+collection = db["predictions"]
 
+# ── Kafka ──────────────────────────────────────────────────
+TOPIC = "transactions"
+consumer = KafkaConsumer(
+    TOPIC,
+    bootstrap_servers="localhost:9092",
+    value_deserializer=lambda v: json.loads(v.decode("utf-8"))
+)
 
-def create_consumer() -> KafkaConsumer:
-    """Crée un consumer Kafka avec désérialisation JSON."""
-    return KafkaConsumer(
-        config.kafka.topic_transactions,
-        bootstrap_servers=config.kafka.bootstrap_servers,
-        value_deserializer=lambda v: json.loads(v.decode("utf-8")),
-        auto_offset_reset="latest",
-        group_id="fraude-consumer-group",
-    )
+def preprocess(row):
+    df = pd.DataFrame([row])
+    df = df.reindex(columns=feature_names, fill_value=0)
+    return df
 
-
-def process_transaction(tx: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Traite une transaction : enrichissement + scoring + stockage.
-
-    TODO semaine 5 :
-    - Récupérer les agrégats glissants depuis Redis
-    - Charger le modèle depuis MLflow
-    - Calculer les features finales
-    - Scorer la transaction
-    - Générer l'explication SHAP
-    - Stocker dans MongoDB
-    """
-    # Placeholder : scoring aléatoire pour l'instant
-    import random
-    fraud_score = random.random()
-    is_fraud = fraud_score > config.model.fraud_threshold
-
-    return {
-        **tx,
-        "fraud_score": fraud_score,
-        "is_fraud": is_fraud,
-        "model_version": "placeholder-0.1",
-    }
-
+def score_transaction(row):
+    try:
+        df = preprocess(row)
+        score = model.predict_proba(df)[0][1]
+        return float(score)
+    except Exception as e:
+        logger.error(f"Model fallback: {e}")
+        return 0.5
 
 def main():
-    logger.info("Démarrage du consumer")
-    consumer = create_consumer()
-    count = 0
+    logger.info("Consumer démarré — en attente de transactions...")
+    for message in consumer:
+        row = message.value
+        score = score_transaction(row)
+        is_fraud = score > 0.5
 
-    try:
-        for message in consumer:
-            tx = message.value
-            result = process_transaction(tx)
+        result = {
+            "transaction_id": int(row.get("TransactionID", 0)),
+            "amount": float(row.get("TransactionAmt", 0)),
+            "score": score,
+            "is_fraud": is_fraud,
+            "drift_status": row.get("drift_status", "NORMAL"),
+            "timestamp": datetime.utcnow()
+        }
 
-            count += 1
-            if count % 100 == 0:
-                logger.info(f"{count} transactions traitées")
+        # ── Sauvegarde MongoDB ─────────────────────────────
+        collection.insert_one(result)
 
-            if result["is_fraud"]:
-                logger.warning(f"FRAUDE détectée : {result['transaction_id']} (score: {result['fraud_score']:.3f})")
-
-    except KeyboardInterrupt:
-        logger.info("Arrêt du consumer demandé")
-    finally:
-        consumer.close()
-        logger.info(f"Consumer arrêté. Total : {count} transactions traitées")
-
+        logger.info(f"ALERT: {result}")
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,126 @@
+import json
+from typing import Dict, Any
+
+import pandas as pd
+def load_model():
+    if not hasattr(load_model, "model"):
+        try:
+            logger.info("Loading ML model...")
+            load_model.model = mlflow.pyfunc.load_model("models/model")
+            logger.info("Model loaded")
+        except Exception as e:
+            logger.error(f"Model loading failed: {e}")
+            load_model.model = None
+    return load_model.model
+
+
+# =========================
+# SCORING (SAFE + FALLBACK)
+# =========================
+def score_transaction(tx: Dict[str, Any]) -> float:
+
+    model = load_model()
+
+    try:
+        if model is not None:
+            df = pd.DataFrame([tx]).fillna(0)
+
+            # tentative predict_proba
+            try:
+                proba = model.predict_proba(df)
+                return float(proba[0][1])
+            except Exception:
+                pred = model.predict(df)
+                return float(pred[0])
+
+        # fallback si pas de modèle
+        raise Exception("No model available")
+
+    except Exception as e:
+        logger.error(f"Model fallback: {e}")
+
+        # fallback simple (rule-based)
+        amt = tx.get("TransactionAmt", 0)
+
+        if amt > 300:
+            return 0.9
+        elif amt > 150:
+            return 0.6
+        else:
+            return 0.1
+
+
+# =========================
+# KAFKA
+# =========================
+def create_consumer():
+    return KafkaConsumer(
+        config.kafka.topic_transactions,
+        bootstrap_servers="127.0.0.1:9092",
+        value_deserializer=lambda x: json.loads(x.decode("utf-8")),
+        auto_offset_reset="earliest",
+        enable_auto_commit=True,
+        group_id="fraud-consumer-group"
+    )
+
+
+# =========================
+# MAIN
+# =========================
+def main():
+
+    logger.info("Consumer ML SAFE started")
+
+    consumer = create_consumer()
+
+    batch = []
+    total = 0
+
+    try:
+        for message in consumer:
+
+            tx = message.value
+
+            if not validate_transaction(tx):
+                continue
+
+            batch.append(tx)
+
+            if len(batch) >= BATCH_SIZE:
+
+                for item in batch:
+
+                    score = score_transaction(item)
+
+                    result = {
+                        "transaction_id": item.get("TransactionID"),
+                        "amount": item.get("TransactionAmt"),
+                        "score": score,
+                        "is_fraud": score > 0.7,
+                        "drift_status": item.get("drift_status", "UNKNOWN")
+                    }
+
+                    if result["is_fraud"]:
+                        logger.warning(f"FRAUD: {result}")
+                    else:
+                        logger.info(f"OK: {result}")
+
+                total += len(batch)
+
+                logger.info(f"Batch processed: {len(batch)} | Total: {total}")
+
+                batch.clear()
+
+    except Exception as e:
+        logger.error(f"ERROR: {e}", exc_info=True)
+
+    except KeyboardInterrupt:
+        logger.info("Manual stop")
+
+    finally:
+        consumer.close()
+        logger.info(f"Total processed: {total}")
+
+
+if __name__ == "__main__":
+ main()
