@@ -77,3 +77,6 @@ logs/
 # Docker volumes locaux
 # ============================================================
 volumes/
+*.save
+*.save.*
+test_*.py
