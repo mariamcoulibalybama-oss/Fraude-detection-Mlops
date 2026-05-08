@@ -80,3 +80,4 @@ volumes/
 *.save
 *.save.*
 test_*.py
+data/mongo/
