@@ -5,8 +5,30 @@ from kafka import KafkaConsumer
 from loguru import logger
 from pymongo import MongoClient
 from datetime import datetime
+from prometheus_client import Counter, Gauge, start_http_server
 
-# ── Modèle ─────────────────────────────────────────────────
+# ── Métriques Prometheus ───────────────────────────────────
+start_http_server(8000)  # expose les métriques sur port 8000
+
+transactions_total = Counter(
+    'fraud_transactions_total',
+    'Nombre total de transactions traitees',
+    ['drift_status']
+)
+fraud_total = Counter(
+    'fraud_detected_total',
+    'Nombre total de fraudes detectees'
+)
+score_gauge = Gauge(
+    'fraud_score_current',
+    'Score de fraude de la derniere transaction'
+)
+score_moyen_gauge = Gauge(
+    'fraud_score_moyen',
+    'Score moyen des 100 dernieres transactions'
+)
+
+# ── Modele ─────────────────────────────────────────────────
 pipeline = joblib.load("models/pipeline_v1.pkl")
 model = pipeline["model"]
 feature_names = pipeline["feature_names"]
@@ -38,24 +60,40 @@ def score_transaction(row):
         logger.error(f"Model fallback: {e}")
         return 0.5
 
+# Score history pour calculer la moyenne
+score_history = []
+
 def main():
-    logger.info("Consumer démarré — en attente de transactions...")
+    logger.info("Consumer demarre — metriques sur port 8000")
     for message in consumer:
         row = message.value
         score = score_transaction(row)
         is_fraud = score > 0.5
+        drift_status = row.get("drift_status", "NORMAL")
 
         result = {
             "transaction_id": int(row.get("TransactionID", 0)),
             "amount": float(row.get("TransactionAmt", 0)),
             "score": score,
             "is_fraud": is_fraud,
-            "drift_status": row.get("drift_status", "NORMAL"),
+            "drift_status": drift_status,
             "timestamp": datetime.utcnow()
         }
 
-        # ── Sauvegarde MongoDB ─────────────────────────────
+        # ── MongoDB ────────────────────────────────────────
         collection.insert_one(result)
+
+        # ── Prometheus ─────────────────────────────────────
+        transactions_total.labels(drift_status=drift_status).inc()
+        score_gauge.set(score)
+
+        if is_fraud:
+            fraud_total.inc()
+
+        score_history.append(score)
+        if len(score_history) > 100:
+            score_history.pop(0)
+        score_moyen_gauge.set(sum(score_history) / len(score_history))
 
         logger.info(f"ALERT: {result}")
 
