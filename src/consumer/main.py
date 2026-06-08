@@ -8,7 +8,7 @@ from datetime import datetime
 from prometheus_client import Counter, Gauge, start_http_server
 
 # ── Métriques Prometheus ───────────────────────────────────
-start_http_server(8000)  # expose les métriques sur port 8000
+start_http_server(8000)
 
 transactions_total = Counter(
     'fraud_transactions_total',
@@ -60,7 +60,6 @@ def score_transaction(row):
         logger.error(f"Model fallback: {e}")
         return 0.5
 
-# Score history pour calculer la moyenne
 score_history = []
 
 def main():
@@ -70,6 +69,9 @@ def main():
         score = score_transaction(row)
         is_fraud = score > 0.5
         drift_status = row.get("drift_status", "NORMAL")
+        drift_phase = row.get("drift_phase", "NORMAL")
+        drift_level = int(row.get("drift_level", 0))
+        mois_simule = row.get("mois_simule", "2025-01")
 
         result = {
             "transaction_id": int(row.get("TransactionID", 0)),
@@ -77,7 +79,10 @@ def main():
             "score": score,
             "is_fraud": is_fraud,
             "drift_status": drift_status,
-            "timestamp": datetime.utcnow()
+            "drift_phase": drift_phase,
+            "drift_level": drift_level,
+            "mois_simule": mois_simule,
+            "timestamp": datetime.utcnow(),
         }
 
         # ── MongoDB ────────────────────────────────────────

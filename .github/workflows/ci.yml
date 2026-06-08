@@ -1,0 +1,32 @@
+name: CI — Fraud Detection MLOps
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Installer les dependances
+        run: |
+          pip install xgboost scikit-learn pandas joblib pytest numpy
+
+      - name: Creer le pipeline de test
+        run: |
+          python tests/create_test_pipeline.py
+
+      - name: Lancer les tests
+        run: |
+          pytest tests/test_pipeline.py -v
