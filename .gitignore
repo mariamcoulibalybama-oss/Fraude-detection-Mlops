@@ -37,12 +37,10 @@ data/generated/*
 !data/generated/.gitkeep
 *.csv
 *.parquet
-*.pkl
 
 # ============================================================
 # Modèles
 # ============================================================
-models/
 *.joblib
 *.h5
 mlruns/
@@ -79,5 +77,4 @@ logs/
 volumes/
 *.save
 *.save.*
-test_*.py
 data/mongo/
