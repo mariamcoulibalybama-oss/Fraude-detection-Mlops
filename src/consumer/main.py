@@ -70,10 +70,23 @@ consumer = KafkaConsumer(
     bootstrap_servers="localhost:9092",
     value_deserializer=lambda v: json.loads(v.decode("utf-8"))
 )
-
 def preprocess(row):
-    """Aligne les colonnes de la transaction sur les features du modèle"""
     df = pd.DataFrame([row])
+
+    # ── Feature engineering : meme transformation qu'a l'entrainement ──
+    # On doit calculer heure_transaction ICI aussi, sinon le reindex
+    # ci-dessous la remplirait avec des zeros (fill_value=0), ce qui
+    # casserait silencieusement la prediction sans erreur visible
+    if "TransactionDT" in df.columns:
+        df["heure_transaction"] = (df["TransactionDT"] // 3600) % 24
+    else:
+        # Securite : si TransactionDT manque dans le message Kafka,
+        # on met une valeur neutre plutot que de planter
+        df["heure_transaction"] = 0
+
+    # Aligner exactement sur les features attendues par le modele
+    # (TransactionID et TransactionDT bruts seront automatiquement
+    # exclus ici puisqu'ils ne sont plus dans feature_names)
     df = df.reindex(columns=feature_names, fill_value=0)
     return df
 

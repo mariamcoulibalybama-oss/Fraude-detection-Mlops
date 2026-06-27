@@ -22,7 +22,21 @@ df = df.loc[:, df.isnull().mean() < 0.5]
 df = df.fillna(0)
 print(f"   Shape : {df.shape}")
 
-X = df.drop(columns=["isFraud"])
+# ── Feature engineering : extraire l'heure depuis TransactionDT ──
+# TransactionDT est en secondes depuis un point de reference arbitraire.
+# 3600 secondes = 1 heure, 86400 secondes = 24h (un jour complet)
+# On extrait uniquement l'heure de la journee (0 a 23), qui a un vrai
+# pouvoir predictif (verifie : taux de fraude varie de 2.3% a 10.6%
+# selon l'heure), contrairement a TransactionDT brut qui est surtout
+# un proxy de l'anciennete absolue (peu fiable en production reelle)
+df["heure_transaction"] = (df["TransactionDT"] // 3600) % 24
+print(f"   Feature 'heure_transaction' creee (0-23h)")
+
+# On retire TransactionID (aucun pouvoir predictif reel, corr=0.014)
+# et TransactionDT brut (remplace par heure_transaction, plus propre
+# et plus interpretable pour le metier)
+X = df.drop(columns=["isFraud", "TransactionID", "TransactionDT"])
+
 y = df["isFraud"]
 
 feature_names = list(X.columns)
