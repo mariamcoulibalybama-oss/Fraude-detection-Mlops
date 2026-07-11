@@ -27,7 +27,7 @@ class KafkaConfig:
 class RedisConfig:
     host: str = os.getenv("REDIS_HOST", "localhost")
     port: int = int(os.getenv("REDIS_PORT", "6379"))
-
+    password: str = os.getenv("REDIS_PASSWORD", "change_this_password_123")
 
 @dataclass
 class MongoConfig:

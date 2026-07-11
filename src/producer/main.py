@@ -12,6 +12,16 @@ logger = get_logger(__name__)
 BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_PATH = BASE_DIR / "data/raw/ieee-fraud-detection/train_transaction.csv"
 
+COLS_ESSENTIELLES = [
+    "TransactionID", "TransactionDT", "TransactionAmt", "isFraud",
+    "card1", "card2", "card3", "card5", "card6",
+    "addr1", "addr2",
+    "C1", "C2", "C5", "C8", "C11", "C13", "C14",
+    "D1", "D4", "D10",
+    "V70", "V82", "V91",
+    "dist1", "DeviceType"
+]
+
 def create_producer():
     return KafkaProducer(
         bootstrap_servers="127.0.0.1:9092",
@@ -20,111 +30,106 @@ def create_producer():
     )
 
 def load_data():
-    df = pd.read_csv(DATA_PATH, nrows=3000).fillna(0)
+    """
+    Charge un échantillon représentatif du dataset IEEE-CIS.
+    On prend ~1000 transactions par mois pour couvrir les 6 mois
+    tout en restant léger en mémoire et rapide pour la démo.
+    Le drift naturel est préservé car on échantillonne de façon
+    stratifiée — proportionnellement aux fraudes réelles de chaque mois.
+    """
+    logger.info("Chargement du dataset...")
+
+    df_cols = pd.read_csv(DATA_PATH, nrows=0).columns.tolist()
+    cols_a_charger = [c for c in COLS_ESSENTIELLES if c in df_cols]
+
+    df = pd.read_csv(DATA_PATH, usecols=cols_a_charger).fillna(0)
+    df = df.sort_values("TransactionDT").reset_index(drop=True)
+
+    # Calculer le mois relatif (0 à 5)
+    dt_min = df["TransactionDT"].min()
+    df["mois_relatif"] = ((df["TransactionDT"] - dt_min) // (30*24*3600)).astype(int)
+
+    # Échantillonner 1000 transactions par mois de façon stratifiée
+    # (proportionnellement au ratio fraude/normal de chaque mois)
+    echantillons = []
+    for mois in sorted(df["mois_relatif"].unique()):
+        df_mois = df[df["mois_relatif"] == mois]
+        n = min(5000, len(df_mois))
+        # Stratifié sur isFraud pour préserver le taux de fraude naturel
+        fraudes = df_mois[df_mois["isFraud"] == 1]
+        normaux = df_mois[df_mois["isFraud"] == 0]
+        n_fraudes = min(len(fraudes), int(n * len(fraudes) / len(df_mois)))
+        n_normaux = n - n_fraudes
+        sample = pd.concat([
+            fraudes.sample(n=n_fraudes, random_state=42),
+            normaux.sample(n=n_normaux, random_state=42)
+        ]).sort_values("TransactionDT")
+        echantillons.append(sample)
+        logger.info(f"Mois {mois} : {len(sample)} transactions "
+                   f"({n_fraudes} fraudes, taux {n_fraudes/len(sample)*100:.1f}%)")
+
+    df_final = pd.concat(echantillons).reset_index(drop=True)
+    logger.info(f"Total : {len(df_final)} transactions représentatives")
+    return df_final, dt_min
+
+def calculate_simulated_dates(df, dt_min):
+    """Dates calendaires simulées à partir du 1er janvier 2025"""
+    date_reference = datetime(2026, 1, 1)
+    df["date_simulee"] = df["TransactionDT"].apply(
+        lambda dt: date_reference + timedelta(seconds=int(dt - dt_min))
+    )
+    df["mois_simule"] = df["date_simulee"].dt.strftime("%Y-%m")
+    logger.info(f"Période : {df['date_simulee'].min().strftime('%Y-%m-%d')} "
+                f"→ {df['date_simulee'].max().strftime('%Y-%m-%d')}")
     return df
 
-# Timeline 2025-2026 — cycle complet sur 2 ans
-TIMELINE = [
-    # (debut, fin, phase, niveau, date_debut, date_fin)
-    # ── 2025 ──────────────────────────────────────────────
-    (0,    500,  "NORMAL",         0, "2025-01-01", "2025-02-28"),
-    (500,  800,  "DRIFT_AMT",      1, "2025-03-01", "2025-03-31"),
-    (800,  1100, "DRIFT_CARD",     2, "2025-04-01", "2025-04-30"),
-    (1100, 1400, "DRIFT_BEHAVIOR", 3, "2025-05-01", "2025-05-31"),
-    (1400, 1600, "DRIFT_FORT",     4, "2025-06-01", "2025-06-30"),
-    (1600, 2000, "NOUVEAU_NORMAL", 0, "2025-07-01", "2025-12-31"),
-    # ── 2026 ──────────────────────────────────────────────
-    (2000, 2300, "NORMAL",         0, "2026-01-01", "2026-02-28"),
-    (2300, 2500, "DRIFT_AMT",      1, "2026-03-01", "2026-03-31"),
-    (2500, 2650, "DRIFT_CARD",     2, "2026-04-01", "2026-04-30"),
-    (2650, 2800, "DRIFT_BEHAVIOR", 3, "2026-05-01", "2026-05-31"),
-    (2800, 2900, "DRIFT_FORT",     4, "2026-06-01", "2026-06-30"),
-    (2900, 3000, "NOUVEAU_NORMAL", 0, "2026-07-01", "2026-12-31"),
-]
-
-def get_phase_and_date(i):
-    idx = i % 3000
-
-    for debut, fin, phase, niveau, date_debut, date_fin in TIMELINE:
-        if debut <= idx < fin:
-            d_debut = datetime.strptime(date_debut, "%Y-%m-%d")
-            d_fin = datetime.strptime(date_fin, "%Y-%m-%d")
-            total_jours = (d_fin - d_debut).days
-            progression = (idx - debut) / (fin - debut)
-            date_simulee = d_debut + timedelta(days=int(progression * total_jours))
-            return phase, niveau, date_simulee
-
-    return "NORMAL", 0, datetime(2025, 1, 1)
-
-def apply_drift(row, phase):
-    if phase in ["NORMAL", "NOUVEAU_NORMAL"]:
-        return row
-
-    if phase == "DRIFT_AMT":
-        if "TransactionAmt" in row:
-            row["TransactionAmt"] *= 1.2
-
-    elif phase == "DRIFT_CARD":
-        if "TransactionAmt" in row:
-            row["TransactionAmt"] *= 1.2
-        if "card1" in row and row["card1"] != 0:
-            row["card1"] = row["card1"] * 1.5
-        if "card2" in row and row["card2"] != 0:
-            row["card2"] = row["card2"] * 1.3
-
-    elif phase == "DRIFT_BEHAVIOR":
-        if "TransactionAmt" in row:
-            row["TransactionAmt"] *= 1.5
-        if "card1" in row and row["card1"] != 0:
-            row["card1"] = row["card1"] * 1.5
-        if "C1" in row and row["C1"] != 0:
-            row["C1"] = row["C1"] * 0.3
-        if "C14" in row and row["C14"] != 0:
-            row["C14"] = row["C14"] * 0.3
-
-    elif phase == "DRIFT_FORT":
-        if "TransactionAmt" in row:
-            row["TransactionAmt"] *= 3.0
-        if "card1" in row and row["card1"] != 0:
-            row["card1"] = row["card1"] * 2.0
-        if "card2" in row and row["card2"] != 0:
-            row["card2"] = row["card2"] * 1.8
-        if "C1" in row and row["C1"] != 0:
-            row["C1"] = row["C1"] * 0.1
-        if "C14" in row and row["C14"] != 0:
-            row["C14"] = row["C14"] * 0.1
-        if "V70" in row and row["V70"] != 0:
-            row["V70"] = row["V70"] * -2.0
-        if "V17" in row and row["V17"] != 0:
-            row["V17"] = row["V17"] * -1.5
-
-    return row
+def get_drift_phase(mois_simule):
+    """
+    Drift basé sur le taux de fraude NATUREL mesuré dans IEEE-CIS :
+    Jan 2025 (mois 0) : 2.53% → NORMAL
+    Fév-Mar 2025      : ~4.00% → DRIFT_NATUREL (+58% vs janvier)
+    Avr-Juin 2025     : ~3.5-4.0% → DRIFT_STABILISE
+    """
+    if mois_simule <= "2025-01":
+        return "NORMAL", "NORMAL"
+    elif mois_simule <= "2025-03":
+        return "DRIFT", "DRIFT_NATUREL"
+    else:
+        return "DRIFT", "DRIFT_STABILISE"
 
 def main():
-    logger.info("Producer demarre — simulation timeline 2025-2026")
-    df = load_data()
+    logger.info("Producer démarré — échantillon représentatif, drift naturel")
+
+    df, dt_min = load_data()
+    df = calculate_simulated_dates(df, dt_min)
     producer = create_producer()
-    i = 0
 
-    while True:
-        row = df.iloc[i % len(df)].to_dict()
+    total = len(df)
+    logger.info(f"Envoi de {total} transactions (~{total/config.producer.transactions_per_second/60:.1f} minutes)")
 
-        phase, level, date_simulee = get_phase_and_date(i)
-        row = apply_drift(row, phase)
+    for i, row_data in df.iterrows():
+        row = row_data.to_dict()
 
-        row["event_time"] = date_simulee.isoformat()
-        row["drift_status"] = "NORMAL" if phase in ["NORMAL", "NOUVEAU_NORMAL"] else "DRIFT"
-        row["drift_phase"] = phase
-        row["drift_level"] = level
-        row["mois_simule"] = date_simulee.strftime("%Y-%m")
+        mois_simule = row.get("mois_simule", "2025-01")
+        drift_status, drift_phase = get_drift_phase(mois_simule)
+
+        row["event_time"] = row_data["date_simulee"].isoformat()
+        row["drift_status"] = drift_status
+        row["drift_phase"] = drift_phase
+        row["drift_level"] = 0 if drift_status == "NORMAL" else 1
+        row["mois_simule"] = mois_simule
+        row.pop("date_simulee", None)
+        row.pop("mois_relatif", None)
 
         producer.send(config.kafka.topic_transactions, value=row)
 
-        if i % 100 == 0:
-            logger.info(f"[{phase}] {date_simulee.strftime('%Y-%m')} — sent {i}")
+        if i % 500 == 0:
+            logger.info(f"[{drift_phase}] {mois_simule} — {i}/{total} "
+                       f"({i/total*100:.1f}%)")
 
-        i += 1
         time.sleep(1 / config.producer.transactions_per_second)
+
+    logger.info("Toutes les transactions ont été envoyées.")
 
 if __name__ == "__main__":
     main()
