@@ -7,71 +7,57 @@ from loguru import logger
 from pymongo import MongoClient
 from datetime import datetime
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
+from dotenv import load_dotenv
+load_dotenv()
+
+from src.features.behavioral import get_behavioral_features
 
 # ── Métriques Prometheus ───────────────────────────────────
-# Démarre le serveur de métriques sur le port 8000
 start_http_server(8000)
 
-# Compteur total de transactions traitées par statut (NORMAL/DRIFT)
 transactions_total = Counter(
     'fraud_transactions_total',
     'Nombre total de transactions traitees',
     ['drift_status']
 )
 
-# Compteur total de fraudes détectées
 fraud_total = Counter(
     'fraud_detected_total',
     'Nombre total de fraudes detectees'
 )
 
-# Jauge du score de la dernière transaction
 score_gauge = Gauge(
     'fraud_score_current',
     'Score de fraude de la derniere transaction'
 )
 
-# Jauge du score moyen des 100 dernières transactions
 score_moyen_gauge = Gauge(
     'fraud_score_moyen',
     'Score moyen des 100 dernieres transactions'
 )
 
-# Histogramme de la latence de scoring en secondes
 scoring_latency = Histogram(
     'fraud_scoring_latency_seconds',
     'Latence de scoring en secondes',
     buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
 )
 
-# Jauge du throughput (transactions par seconde)
 throughput_gauge = Gauge(
     'fraud_throughput_tps',
     'Transactions traitees par seconde'
 )
 
 # ── Chargement du modèle ───────────────────────────────────
-# Charge le pipeline complet (modèle + features)
 pipeline = joblib.load("models/pipeline_v1.pkl")
 model = pipeline["model"]
 feature_names = pipeline["feature_names"]
 
 # ── Connexion MongoDB ──────────────────────────────────────
-# Se connecte à MongoDB pour stocker les prédictions
 mongo = MongoClient("mongodb://admin:changeme@localhost:27017/")
 db = mongo["fraude_db"]
 collection = db["predictions"]
 
-
-import redis
-import os
-redis_client = redis.Redis(
-    host="localhost", port=6379,
-    password=os.getenv("REDIS_PASSWORD", ""),
-    decode_responses=True
-)
 # ── Connexion Kafka ────────────────────────────────────────
-# Écoute le topic "transactions" en continu
 TOPIC = "transactions"
 consumer = KafkaConsumer(
     TOPIC,
@@ -82,54 +68,6 @@ consumer = KafkaConsumer(
     enable_auto_commit=True
 )
 
-def get_behavioral_features(row):
-    """
-    Calcule 4 features comportementales via Redis, basées sur le temps
-    SIMULE (TransactionDT), pas l'heure système reelle — indispensable
-    car le producer rejoue des donnees historiques en accelere.
-    """
-    card = str(row.get("card1", "unknown"))
-    montant = float(row.get("TransactionAmt", 0))
-    event_dt = float(row.get("TransactionDT", 0))
-
-    window_key = f"card:{card}:window"
-    last_ts_key = f"card:{card}:last_ts"
-    hist_sum_key = f"card:{card}:hist_sum"
-    hist_count_key = f"card:{card}:hist_count"
-
-    # ── 1 & 2. Fenetre glissante 1h (sorted set score=temps simule) ──
-    member = f"{event_dt}_{montant}_{redis_client.incr('global_counter')}"
-    redis_client.zadd(window_key, {member: event_dt})
-    redis_client.zremrangebyscore(window_key, "-inf", event_dt - 3600)
-    redis_client.expire(window_key, 86400)
-
-    members = redis_client.zrange(window_key, 0, -1)
-    nb_tx_1h = len(members)
-    montant_cumule_1h = sum(float(m.split("_")[1]) for m in members)
-
-    # ── 3. Temps depuis la derniere transaction de cette carte ──
-    last_ts = redis_client.get(last_ts_key)
-    temps_depuis_derniere_tx = (event_dt - float(last_ts)) if last_ts else -1.0
-    redis_client.set(last_ts_key, event_dt, ex=86400)
-
-    # ── 4. Ecart vs moyenne historique (calcule AVANT mise a jour,
-    #        pour eviter d'inclure la transaction dans sa propre reference) ──
-    hist_sum = float(redis_client.get(hist_sum_key) or 0)
-    hist_count = int(redis_client.get(hist_count_key) or 0)
-    moyenne = (hist_sum / hist_count) if hist_count > 0 else montant
-    ecart_montant_vs_moyenne_carte = (montant - moyenne) / moyenne if moyenne > 0 else 0.0
-
-    redis_client.incrbyfloat(hist_sum_key, montant)
-    redis_client.incr(hist_count_key)
-    redis_client.expire(hist_sum_key, 604800)
-    redis_client.expire(hist_count_key, 604800)
-
-    return {
-        "nb_tx_1h": nb_tx_1h,
-        "montant_cumule_1h": montant_cumule_1h,
-        "temps_depuis_derniere_tx": temps_depuis_derniere_tx,
-        "ecart_montant_vs_moyenne_carte": ecart_montant_vs_moyenne_carte,
-    }
 def preprocess(row):
     df = pd.DataFrame([row])
 
@@ -138,7 +76,7 @@ def preprocess(row):
     else:
         df["heure_transaction"] = 0
 
-    # ── Features comportementales Redis ──
+    # ── Features comportementales Redis (module src.features) ──
     behav = get_behavioral_features(row)
     for k, v in behav.items():
         df[k] = v
@@ -147,21 +85,14 @@ def preprocess(row):
     return df
 
 def score_transaction(row):
-    """
-    Calcule le score de fraude et mesure la latence
-    Retourne (score, latence_ms)
-    """
+    """Calcule le score de fraude et mesure la latence. Retourne (score, latence_ms)."""
     try:
-        # Démarrer le chronomètre
         start = time.time()
 
         df = preprocess(row)
         score = model.predict_proba(df)[0][1]
 
-        # Calculer la latence en millisecondes
         latence_ms = (time.time() - start) * 1000
-
-        # Enregistrer la latence dans Prometheus
         scoring_latency.observe(latence_ms / 1000)
 
         return float(score), latence_ms
@@ -170,10 +101,7 @@ def score_transaction(row):
         logger.error(f"Model fallback: {e}")
         return 0.5, 0.0
 
-# Historique des scores pour calculer la moyenne
 score_history = []
-
-# Variables pour calculer le throughput
 window_start = time.time()
 window_count = 0
 
@@ -185,17 +113,14 @@ def main():
     for message in consumer:
         row = message.value
 
-        # Scorer la transaction et mesurer la latence
         score, latence_ms = score_transaction(row)
         is_fraud = score > 0.5
 
-        # Récupérer les infos de drift
         drift_status = row.get("drift_status", "NORMAL")
         drift_phase = row.get("drift_phase", "NORMAL")
         drift_level = int(row.get("drift_level", 0))
-        mois_simule = row.get("mois_simule", "2025-01")
+        mois_simule = row.get("mois_simule", "2026-01")
 
-        # Construire le résultat à sauvegarder
         result = {
             "transaction_id": int(row.get("TransactionID", 0)),
             "amount": float(row.get("TransactionAmt", 0)),
@@ -209,27 +134,19 @@ def main():
             "timestamp": datetime.utcnow(),
         }
 
-        # Sauvegarder dans MongoDB
         collection.insert_one(result)
 
-        # ── Mettre à jour les métriques Prometheus ─────────
-        # Incrémenter le compteur de transactions
         transactions_total.labels(drift_status=drift_status).inc()
-
-        # Mettre à jour le score actuel
         score_gauge.set(score)
 
-        # Incrémenter le compteur de fraudes si détectée
         if is_fraud:
             fraud_total.inc()
 
-        # Calculer le score moyen sur les 100 dernières transactions
         score_history.append(score)
         if len(score_history) > 100:
             score_history.pop(0)
         score_moyen_gauge.set(sum(score_history) / len(score_history))
 
-        # Calculer le throughput toutes les 10 secondes
         window_count += 1
         elapsed = time.time() - window_start
         if elapsed >= 10:

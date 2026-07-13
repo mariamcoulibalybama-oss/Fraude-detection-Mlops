@@ -90,9 +90,9 @@ def get_drift_phase(mois_simule):
     Fév-Mar 2025      : ~4.00% → DRIFT_NATUREL (+58% vs janvier)
     Avr-Juin 2025     : ~3.5-4.0% → DRIFT_STABILISE
     """
-    if mois_simule <= "2025-01":
+    if mois_simule <= "2026-01":
         return "NORMAL", "NORMAL"
-    elif mois_simule <= "2025-03":
+    elif mois_simule <= "2026-03":
         return "DRIFT", "DRIFT_NATUREL"
     else:
         return "DRIFT", "DRIFT_STABILISE"
@@ -110,7 +110,7 @@ def main():
     for i, row_data in df.iterrows():
         row = row_data.to_dict()
 
-        mois_simule = row.get("mois_simule", "2025-01")
+        mois_simule = row.get("mois_simule", "2026-01")
         drift_status, drift_phase = get_drift_phase(mois_simule)
 
         row["event_time"] = row_data["date_simulee"].isoformat()

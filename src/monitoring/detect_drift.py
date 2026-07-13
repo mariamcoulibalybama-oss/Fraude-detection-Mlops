@@ -6,7 +6,7 @@ import pandas as pd
 from pymongo import MongoClient
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 # ── Chargement MongoDB ─────────────────────────────────────
 print("📦 Chargement des données depuis MongoDB...")

@@ -7,23 +7,19 @@ Plateforme de détection de fraude bancaire en streaming avec monitoring de drif
 Ce projet implémente un pipeline complet de détection de fraude en temps réel :
 
 - **Ingestion** : producer Python qui simule un flux de transactions via Kafka
-- **Feature store** : Redis pour les agrégats glissants temps réel
-- **Modèle** : XGBoost entraîné sur IEEE-CIS, explicabilité via SHAP
+- **Feature store** : Redis pour les agrégats glissants temps réel (4 features comportementales)
+- **Modèle** : XGBoost entraîné sur IEEE-CIS (213 features), explicabilité via SHAP
 - **Stockage** : MongoDB pour l'historique complet
-- **MLOps** : MLflow (tracking), Evidently (drift), Prometheus + Grafana (monitoring)
+- **MLOps** : MLflow (tracking), détection de drift par test KS, Prometheus + Grafana (monitoring)
 - **UI** : Streamlit pour les analystes
 
 ## Workflow de développement
-
-```
 Machine locale              GitHub              VPS (production)
 ─────────────────          ──────             ──────────────────
-Écrire le code      ─push─►                        
-                             ├─pull─►  docker-compose up -d
-Commit + push       ─────►                         
-                                                  Stack tourne en continu
-```
-
+Écrire le code      ─push─►
+├─pull─►  docker-compose up -d
+Commit + push       ─────►
+Stack tourne en continu
 Cycle type : code en local → commit → push → SSH au VPS → pull → redémarrer Docker.
 
 ## Prérequis
@@ -43,7 +39,7 @@ Cycle type : code en local → commit → push → SSH au VPS → pull → redé
 ### 1. Cloner le repo sur ta machine locale
 
 ```bash
-git clone https://github.com/<ton-username>/fraude-mlops-streaming.git
+git clone https://github.com/mariamcoulibalybama-oss/Fraude-detection-Mlops.git
 cd fraude-mlops-streaming
 ```
 
@@ -62,7 +58,7 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Éditer .env avec tes valeurs (rien à changer pour un usage local standard)
+# Éditer .env avec tes valeurs (REDIS_PASSWORD notamment)
 ```
 
 ### 4. Tester la connectivité Docker (en local)
@@ -88,15 +84,15 @@ unzip data/raw/ieee-fraud-detection.zip -d data/raw/
 
 ```bash
 # Se connecter au VPS
-ssh stagiaire@72.62.16.22
+ssh bama@72.62.16.22
 
 # Cloner le repo
-cd /home/stagiaire/projet-fraude
-git clone https://github.com/<ton-username>/fraude-mlops-streaming.git .
+cd ~/fraude-mlops-streaming
+git clone https://github.com/mariamcoulibalybama-oss/Fraude-detection-Mlops.git .
 
 # Copier la config
 cp .env.example .env
-# Adapter .env si nécessaire
+# Adapter .env si nécessaire (REDIS_PASSWORD)
 
 # Lancer la stack
 docker-compose up -d
@@ -109,8 +105,8 @@ python scripts/test_connectivity.py
 ### Mises à jour ultérieures
 
 ```bash
-ssh stagiaire@72.62.16.22
-cd /home/stagiaire/projet-fraude
+ssh bama@72.62.16.22
+cd ~/fraude-mlops-streaming
 git pull
 docker-compose up -d --build
 ```
@@ -130,14 +126,13 @@ Une fois la stack lancée, les interfaces sont accessibles sur :
 
 ## Structure du projet
 
-```
 fraude-mlops-streaming/
 ├── src/
-│   ├── producer/          # Génération de transactions vers Kafka
-│   ├── consumer/          # Consommation du stream + scoring
-│   ├── model/             # Entraînement et chargement du modèle
-│   ├── features/          # Feature engineering + feature store Redis
-│   ├── monitoring/        # Drift detection avec Evidently
+│   ├── producer/          # Génération de transactions vers Kafka (échantillonnage stratifié)
+│   ├── consumer/          # Consommation du stream + scoring temps réel
+│   ├── model/             # Entraînement, évaluation, comparaison, explicabilité (SHAP)
+│   ├── features/          # Feature store Redis (agrégats comportementaux)
+│   ├── monitoring/        # Détection de drift (KS test) + retraining automatique
 │   └── utils/             # Utilitaires partagés (config, logging)
 ├── notebooks/             # Exploration et expérimentation
 ├── docker/                # Dockerfiles et configs Docker
@@ -146,13 +141,34 @@ fraude-mlops-streaming/
 │   ├── raw/              # Dataset brut IEEE-CIS
 │   ├── processed/        # Dataset préparé
 │   └── generated/        # Données générées pour le stream
-├── config/                # Fichiers de configuration (YAML)
-├── scripts/               # Scripts utilitaires
+├── config/                # Fichiers de configuration
+├── scripts/               # Utilitaires (test_connectivity, create_test_pipeline)
 ├── docs/                  # Documentation du projet
 ├── docker-compose.yml     # Orchestration de la stack
 ├── requirements.txt       # Dépendances Python
 ├── .env.example           # Variables d'environnement modèle
 └── README.md
+## Lancement du pipeline
+
+```bash
+# Terminal 1 — Consumer (scoring temps réel)
+python -m src.consumer.main
+
+# Terminal 2 — Producer (flux de transactions)
+export TRANSACTIONS_PER_SECOND=100
+python -m src.producer.main
+
+# Dashboard analyste
+streamlit run src/dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+
+# Détection de drift (ponctuelle)
+python -m src.monitoring.detect_drift
+
+# Retraining automatique (boucle continue, sans intervention humaine)
+python -m src.monitoring.auto_retrain
+
+# Entraînement initial du modèle
+python -m src.model.train_model
 ```
 
 ## Planning du projet
@@ -187,7 +203,7 @@ fraude-mlops-streaming/
 docker-compose logs -f kafka
 
 # Redémarrer un service
-docker-compose restart consumer
+docker-compose restart redis
 
 # Tout arrêter (sans supprimer les données)
 docker-compose stop

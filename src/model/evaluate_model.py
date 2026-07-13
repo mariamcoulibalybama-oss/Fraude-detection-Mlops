@@ -8,7 +8,7 @@ from sklearn.metrics import (
 )
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_PATH = BASE_DIR / "data/raw/ieee-fraud-detection/train_transaction.csv"
 
 print("📦 Chargement du pipeline...")

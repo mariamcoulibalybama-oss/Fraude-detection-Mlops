@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import recall_score, precision_score, f1_score
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_PATH = BASE_DIR / "data/raw/ieee-fraud-detection/train_transaction.csv"
 MODEL_DIR = BASE_DIR / "models"
 CONFIG_DIR = BASE_DIR / "config"
