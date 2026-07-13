@@ -13,13 +13,24 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_PATH = BASE_DIR / "data/raw/ieee-fraud-detection/train_transaction.csv"
 
 COLS_ESSENTIELLES = [
+    # Identifiants, label et temps (indispensables au pipeline)
     "TransactionID", "TransactionDT", "TransactionAmt", "isFraud",
-    "card1", "card2", "card3", "card5", "card6",
+    # Colonnes couvrant 90% de l'importance du modele (quantification feature parity)
+    "card1", "card2", "card3", "card5",
     "addr1", "addr2",
-    "C1", "C2", "C5", "C8", "C11", "C13", "C14",
-    "D1", "D4", "D10",
-    "V70", "V82", "V91",
-    "dist1", "DeviceType"
+    "dist1",
+    "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10",
+    "C11", "C12", "C13", "C14",
+    "D1", "D2", "D3", "D4", "D10", "D11", "D15",
+    "V4", "V7", "V10", "V12", "V13", "V14", "V20", "V21", "V23", "V24",
+    "V25", "V26", "V29", "V30", "V33", "V34", "V35", "V36", "V38", "V40",
+    "V45", "V48", "V49", "V52", "V53", "V54", "V55", "V56", "V60", "V62",
+    "V66", "V67", "V69", "V70", "V71", "V72", "V74", "V75", "V76", "V82",
+    "V83", "V87", "V91", "V92", "V94", "V96", "V99", "V100", "V102", "V103",
+    "V109", "V110", "V115", "V124", "V128", "V129", "V130", "V131", "V133",
+    "V136", "V137", "V279", "V280", "V281", "V283", "V285", "V286", "V289",
+    "V291", "V293", "V294", "V296", "V304", "V307", "V308", "V309", "V310",
+    "V311", "V312", "V313", "V314", "V315", "V317", "V320", "V321",
 ]
 
 def create_producer():
