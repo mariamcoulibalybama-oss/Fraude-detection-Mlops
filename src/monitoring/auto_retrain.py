@@ -48,7 +48,19 @@ def check_drift():
 
 def retrain():
     print("🚀 Chargement des données...")
-    df = pd.read_csv(DATA_PATH)
+# Charger uniquement les colonnes utiles (~120 au lieu de 394)
+    # pour reduire le pic memoire (~3x) et permettre la cohabitation
+    # avec le scoring temps reel sur une machine unique
+    import json as _json
+    with open(CONFIG_DIR / "feature_names.json") as f:
+        cols_utiles = _json.load(f)
+    calculees = {"heure_transaction", "nb_tx_1h", "montant_cumule_1h",
+                 "temps_depuis_derniere_tx", "ecart_montant_vs_moyenne_carte"}
+    cols_csv = [c for c in cols_utiles if c not in calculees]
+    cols_csv += ["TransactionID", "TransactionDT", "isFraud", "card1"]
+    cols_csv = list(dict.fromkeys(cols_csv))
+
+    df = pd.read_csv(DATA_PATH, usecols=lambda c: c in cols_csv)
     df = df.select_dtypes(include=["number"])
     df = df.loc[:, df.isnull().mean() < 0.5]
     df = df.fillna(0)

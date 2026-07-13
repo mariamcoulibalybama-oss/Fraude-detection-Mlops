@@ -18,9 +18,9 @@ def test_pipeline_contient_model_et_features():
     assert "feature_names" in pipeline, "Clé 'feature_names' manquante"
 
 def test_nombre_features():
-    """Vérifie qu'on a bien 210 features"""
+    """Vérifie qu on a bien 213 features (209 statiques + heure_transaction retiree du compte + 4 comportementales)"""
     pipeline = joblib.load(BASE_DIR / "models/pipeline_v1.pkl")
-    assert len(pipeline["feature_names"]) == 210, "Nombre de features incorrect"
+    assert len(pipeline["feature_names"]) == 213, "Nombre de features incorrect"
 
 def test_feature_names_json_existe():
     """Vérifie que feature_names.json existe"""
